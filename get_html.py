@@ -199,9 +199,16 @@ async def get_html(url, proxy=None, params={}, headers=None, skip_httpx=False, t
 # 主函数保持不变
 async def main():
     test_urls = [
-        #"https://httpbin.org/html",
-        "https://luxmix.top/",  # 测试 Cloudflare 防护
-        'https://npiter.tech',
+        "https://httpbin.org/html",
+        "https://quotes.toscrape.com/js/",
+        "https://httpbin.org/delay/5",
+        "https://httpbin.org/redirect/3",
+        "https://jigsaw.w3.org/HTTP/Basic/",
+        "https://expired.badssl.com/",  # 这个 URL 有过期证书
+        "https://dqxy.ahu.edu.cn/2023/0721/c6135a312651/page.htm",
+        'http://www.baidu.com/link?url=eEncaqZXAV0hqcbKfGGiC_fe0E8CTbw1amFQyZHMCn2xvMlQ6Wr8CgxNB3dYStMku94EXCnAuEDS7z3NNhz4Ja',
+        'https://grok.com',
+        'https://luxmix.top/',
     ]
     proxy = "http://127.0.0.1:7890"
     test_headers = {
@@ -213,8 +220,8 @@ async def main():
         html_content = await get_html(test_url, proxy=proxy, headers=test_headers)
         if html_content:
             print(f"成功获取 HTML 内容 (前 300 字符):")
-            #print(html_content[:300].strip() + "...")
-            print(html_content)
+            print(html_content[:300].strip() + "...")
+            #print(html_content)
         else:
             print(f"未能获取 URL 的 HTML 内容: {test_url}")
         print(f"{'='*30}\n")
