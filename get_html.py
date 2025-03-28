@@ -21,8 +21,27 @@ async def wait_with_backoff(attempt, base_delay=0.5, max_delay=5.0):
     logging.info(f"等待 {wait_time:.2f} 秒后重试...")
     await asyncio.sleep(wait_time)
 
+async def is_cloudflare_response(response):
+    """检测响应是否为 Cloudflare 防护页面"""
+    # 检查响应头
+    headers = response.headers
+    if 'server' in headers and 'cloudflare' in headers['server'].lower():
+        logging.info("检测到 Cloudflare 防护（基于 Server 头）。")
+        return True
+    if 'cf-ray' in headers:
+        logging.info("检测到 Cloudflare 防护（基于 cf-ray 头）。")
+        return True
+
+    # 检查响应内容
+    content = response.text.lower()
+    if 'cloudflare' in content or 'access denied' in content or 'cf-ray' in content:
+        logging.info("检测到 Cloudflare 防护（基于内容）。")
+        return True
+
+    return False
+
 async def get_html(url, proxy=None, params={}, headers=None, skip_httpx=False, timeout=30, httpx_retries=2):
-    """获取指定 URL 的 HTML 内容，默认先尝试 httpx，若 skip_httpx=True 则直接使用 Playwright"""
+    """获取指定 URL 的 HTML 内容，默认先尝试 httpx，若检测到 Cloudflare 则切换到 Playwright"""
     logging.info(f"开始尝试获取 URL 的 HTML: {url}")
     html_code = None
 
@@ -65,6 +84,11 @@ async def get_html(url, proxy=None, params={}, headers=None, skip_httpx=False, t
                         response = await client.get(url_with_params)
                         final_url = str(response.url)
                         logging.info(f"httpx 收到状态码: {response.status_code}, 最终 URL: {final_url}")
+
+                        # 检测是否为 Cloudflare 防护页面
+                        if await is_cloudflare_response(response):
+                            logging.info("检测到 Cloudflare 防护，切换到 Playwright。")
+                            break  # 跳出 httpx 重试循环，直接进入 Playwright
 
                         if response.is_success:
                             try:
@@ -133,28 +157,26 @@ async def get_html(url, proxy=None, params={}, headers=None, skip_httpx=False, t
         logging.warning("httpx 方法未能获取有效 HTML 或内容。将使用 Playwright")
         html_code = None
 
-    # Playwright 方法（如果 skip_httpx=True 或 httpx 失败）
-    logging.info("--- 方法: Playwright---")
+    # Playwright 方法（如果 skip_httpx=True 或 httpx 失败/检测到 CF）
+    logging.info("--- 方法: Playwright ---")
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
             args=["--disable-blink-features=AutomationControlled"],
             proxy={"server": proxy} if proxy else None
         )
-        # 默认的 Playwright 请求头
         default_playwright_headers = {
-            "Accept": "*/*",  # 接受任意内容类型
+            "Accept": "*/*",
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Accept-Encoding": "gzip, deflate, br",
             "Connection": "keep-alive",
             "Upgrade-Insecure-Requests": "1",
         }
-        # 如果传入了 headers，则使用传入的 headers，否则使用默认值
         playwright_headers = headers if headers else default_playwright_headers
         context = await browser.new_context(
             user_agent=playwright_headers.get("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"),
             extra_http_headers=playwright_headers,
-            ignore_https_errors=True  # 忽略 HTTPS 证书错误
+            ignore_https_errors=True
         )
         page = await context.new_page()
 
@@ -162,15 +184,10 @@ async def get_html(url, proxy=None, params={}, headers=None, skip_httpx=False, t
             print(f"请求: {request.url}")
         page.on("request", log_request)
 
-        # 如果有参数，构造带参数的 URL
-        if params:
-            full_url = f"{url}?{'&'.join(f'{k}={v}' for k, v in params.items())}"
-        else:
-            full_url = url
+        full_url = url_with_params
         print(f"正在访问: {full_url}")
 
         response = await page.goto(full_url, wait_until="networkidle")
-
         content = await page.content()
         final_url = page.url
         print(f"最终 URL: {final_url}")
@@ -179,39 +196,25 @@ async def get_html(url, proxy=None, params={}, headers=None, skip_httpx=False, t
         await browser.close()
         return content
 
+# 主函数保持不变
 async def main():
-    """主函数，测试多个 URL 的 HTML 获取"""
     test_urls = [
-        "https://httpbin.org/html",
-        "https://quotes.toscrape.com/js/",
-        "https://httpbin.org/delay/5",
-        "https://httpbin.org/redirect/3",
-        "https://jigsaw.w3.org/HTTP/Basic/",
-        "https://expired.badssl.com/",  # 这个 URL 有过期证书
-        "https://dqxy.ahu.edu.cn/2023/0721/c6135a312651/page.htm",
-        'http://www.baidu.com/link?url=eEncaqZXAV0hqcbKfGGiC_fe0E8CTbw1amFQyZHMCn2xvMlQ6Wr8CgxNB3dYStMku94EXCnAuEDS7z3NNhz4Ja'
+        #"https://httpbin.org/html",
+        "https://luxmix.top/",  # 测试 Cloudflare 防护
+        'https://npiter.tech',
     ]
-
-    proxy = "http://127.0.0.1:7890"  # 代理设置
-    # proxy = None  # 默认无代理
-
-    # 测试用的参数
-    test_params = {"key1": "value1", "key2": "value2"}
-
-    # 测试用的自定义 headers
+    proxy = "http://127.0.0.1:7890"
     test_headers = {
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
-        "Custom-Header": "Test-Value"
     }
 
     for test_url in test_urls:
         print(f"\n{'='*10} 测试 URL: {test_url} {'='*10}")
-        # 设置 skip_httpx=True 来直接使用 Playwright，跳过 httpx
-        html_content = await get_html(test_url, proxy=proxy, params=test_params, headers=test_headers)
-
+        html_content = await get_html(test_url, proxy=proxy, headers=test_headers)
         if html_content:
             print(f"成功获取 HTML 内容 (前 300 字符):")
-            print(html_content[:300].strip() + "...")
+            #print(html_content[:300].strip() + "...")
+            print(html_content)
         else:
             print(f"未能获取 URL 的 HTML 内容: {test_url}")
         print(f"{'='*30}\n")
