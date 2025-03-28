@@ -196,7 +196,6 @@ async def get_html(url, proxy=None, params={}, headers=None, skip_httpx=False, t
         await browser.close()
         return content
 
-# 主函数保持不变
 async def main():
     test_urls = [
         "https://httpbin.org/html",
