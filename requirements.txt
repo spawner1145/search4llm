@@ -1,0 +1,5 @@
+lxml
+html2text
+bs4
+httpx<0.28.0
+playwright
