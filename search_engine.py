@@ -48,7 +48,7 @@ def extract_div_contents(html_content):
     
     return entries
 
-async def searx_search(query, top_n=10, proxy=None):
+async def searx_search(query, top_n=20, proxy=None):
     url = 'https://searx.bndkt.io/search'
     current_timestamp = int(time.time())
     
@@ -149,7 +149,7 @@ async def searx_search(query, top_n=10, proxy=None):
     final = "searx搜索结果:\n" + "\n".join(results)
     return final, urls[:top_n]
 
-async def baidu_search(query, top_n=10, proxy=None):
+async def baidu_search(query, top_n=20, proxy=None):
     current_timestamp = int(time.time())
     base_url = "https://www.baidu.com/s"
     query_encoded = quote(query.encode('utf-8', 'ignore'))
@@ -233,10 +233,7 @@ async def baidu_search(query, top_n=10, proxy=None):
     output = "baidu搜索结果:\n" + "\n".join(results)
     return output, urls[:top_n]
 
-async def edge_search(query, top_n=10, proxy=None):
-    """
-    edge太恶心了,所以我用了playwright
-    """
+async def edge_search(query, top_n=20, proxy=None):
     results = []
     url_ls = []
     page_num = 1
@@ -257,7 +254,8 @@ async def edge_search(query, top_n=10, proxy=None):
         await page.evaluate("() => { Object.defineProperty(navigator, 'webdriver', { get: () => false }); }")
         
         while len(url_ls) < top_n:
-            search_url = f"https://www.bing.com/search?q={query}&first={(page_num - 1) * 10 + 1}"
+            search_url = f"https://www.cn.bing.com/search?q={query}&first={(page_num - 1) * 10 + 1}&FORM=PERE"
+            print(f"正在访问第 {page_num} 页: {search_url}")
             
             retry_count = 0
             page_results_found = False
@@ -325,7 +323,7 @@ async def main():
         try:
             query = input("请输入搜索关键词：")
                 
-            results, urls = await baidu_search(query, proxy=proxy)
+            results, urls = await edge_search(query, proxy=proxy)
             
             print(results)
             print("有效链接列表：")
