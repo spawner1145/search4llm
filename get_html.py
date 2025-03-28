@@ -5,12 +5,13 @@ import logging
 import random
 import ssl
 
+# 配置日志格式
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 MAX_RETRIES = 2  # httpx 重试次数
-HTTPX_TIMEOUT = 15
+HTTPX_TIMEOUT = 15  # httpx 请求超时时间（秒）
 
-# httpx 使用的 Headers
-HTTPX_HEADERS = {
+# 默认的 httpx 请求头
+DEFAULT_HTTPX_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
     "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
@@ -19,28 +20,41 @@ HTTPX_HEADERS = {
     "Upgrade-Insecure-Requests": "1",
 }
 
+# 创建并配置 SSL 上下文，忽略证书验证
 ssl_context = ssl.create_default_context()
 ssl_context.check_hostname = False
 ssl_context.verify_mode = ssl.CERT_NONE
 
 async def wait_with_backoff(attempt, base_delay=0.5, max_delay=5.0):
-    """根据尝试次数进行指数退避等待，并加入随机抖动。"""
+    """根据尝试次数进行指数退避等待，并加入随机抖动"""
     delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
     jitter = delay * random.uniform(0.1, 0.5)
     wait_time = delay + jitter
     logging.info(f"等待 {wait_time:.2f} 秒后重试...")
     await asyncio.sleep(wait_time)
 
-async def get_html(url, proxy=None):
+async def get_html(url, proxy=None, params={}, headers=None):
+    """获取指定 URL 的 HTML 内容，先尝试 httpx，若失败则使用 Playwright，支持自定义 headers"""
     logging.info(f"开始尝试获取 URL 的 HTML: {url}")
     html_code = None
 
-    # httpx
+    # 如果有参数，构造带参数的 URL
+    if params:
+        url_with_params = f"{url}?{'&'.join(f'{k}={v}' for k, v in params.items())}"
+    else:
+        url_with_params = url
+
+    # 如果传入了 headers，则合并默认 headers 和自定义 headers，自定义 headers 优先
+    httpx_headers = DEFAULT_HTTPX_HEADERS.copy()
+    if headers:
+        httpx_headers.update(headers)
+
+    # httpx 方法
     logging.info("--- 方法: httpx ---")
     try:
         proxies = {"http://": proxy, "https://": proxy} if proxy else None
         async with httpx.AsyncClient(
-            headers=HTTPX_HEADERS,
+            headers=httpx_headers,
             follow_redirects=True,
             timeout=HTTPX_TIMEOUT,
             verify=ssl_context,
@@ -49,7 +63,7 @@ async def get_html(url, proxy=None):
             for attempt in range(1, MAX_RETRIES + 1):
                 logging.info(f"httpx 第 {attempt}/{MAX_RETRIES} 次尝试...")
                 try:
-                    response = await client.get(url)
+                    response = await client.get(url_with_params)
                     final_url = str(response.url)
                     logging.info(f"httpx 收到状态码: {response.status_code}, 最终 URL: {final_url}")
 
@@ -112,7 +126,7 @@ async def get_html(url, proxy=None):
                     html_code = None
                     if attempt < MAX_RETRIES: await wait_with_backoff(attempt)
 
-            if html_code: return html_code  # 如果 httpx 成功了
+            if html_code: return html_code  # 如果 httpx 成功，返回结果
 
     except Exception as client_init_err:
         logging.error(f"初始化 httpx 客户端时出错: {client_init_err}")
@@ -120,7 +134,7 @@ async def get_html(url, proxy=None):
     logging.warning("httpx 方法未能获取有效 HTML 或内容。将使用 Playwright")
     html_code = None
 
-    # Playwright
+    # Playwright 方法
     logging.info("--- 方法: Playwright---")
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -128,43 +142,45 @@ async def get_html(url, proxy=None):
             args=["--disable-blink-features=AutomationControlled"],
             proxy={"server": proxy} if proxy else None
         )
+        # 默认的 Playwright 请求头
+        default_playwright_headers = {
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            "Accept-Encoding": "gzip, deflate, br",
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+        }
+        # 如果传入了 headers，则使用传入的 headers，否则使用默认值
+        playwright_headers = headers if headers else default_playwright_headers
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-            extra_http_headers={
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-                "Accept-Encoding": "gzip, deflate, br",
-                "Connection": "keep-alive",
-                "Upgrade-Insecure-Requests": "1",
-            }
+            user_agent=playwright_headers.get("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"),
+            extra_http_headers=playwright_headers
         )
         page = await context.new_page()
 
         async def log_request(request):
-            print(f"Request: {request.url}")
+            print(f"请求: {request.url}")
         page.on("request", log_request)
 
-        params = {}
-        headers = {"User-Agent": "Mozilla/5.0"}
-        await context.set_extra_http_headers(headers)
-
+        # 如果有参数，构造带参数的 URL
         if params:
             full_url = f"{url}?{'&'.join(f'{k}={v}' for k, v in params.items())}"
         else:
             full_url = url
-        print(f"Visiting: {full_url}")
+        print(f"正在访问: {full_url}")
 
         response = await page.goto(full_url, wait_until="networkidle")
 
         content = await page.content()
         final_url = page.url
-        print(f"Final URL: {final_url}")
+        print(f"最终 URL: {final_url}")
 
         await context.close()
         await browser.close()
         return content
 
 async def main():
+    """主函数，测试多个 URL 的 HTML 获取"""
     test_urls = [
         "https://httpbin.org/html",
         "https://quotes.toscrape.com/js/",
@@ -176,12 +192,21 @@ async def main():
         'http://www.baidu.com/link?url=eEncaqZXAV0hqcbKfGGiC_fe0E8CTbw1amFQyZHMCn2xvMlQ6Wr8CgxNB3dYStMku94EXCnAuEDS7z3NNhz4Ja'
     ]
 
-    proxy = "http://127.0.0.1:7890"
+    proxy = "http://127.0.0.1:7890"  # 代理设置
     # proxy = None  # 默认无代理
+
+    # 测试用的参数
+    test_params = {}
+
+    # 测试用的自定义 headers
+    test_headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.114 Safari/537.36",
+        "Custom-Header": "Test-Value"
+    }
 
     for test_url in test_urls:
         print(f"\n{'='*10} 测试 URL: {test_url} {'='*10}")
-        html_content = await get_html(test_url, proxy=proxy)
+        html_content = await get_html(test_url, proxy=proxy, params=test_params, headers=test_headers)
 
         if html_content:
             print(f"成功获取 HTML 内容 (前 300 字符):")
