@@ -9,11 +9,46 @@ import httpx
 import asyncio
 from bs4 import BeautifulSoup
 import time
-from urllib.parse import urljoin, quote, unquote
+from urllib.parse import quote
 from playwright.async_api import async_playwright
 import random
+import re
 
-async def searx_search(query, top_n=10):
+async def fetch_url(url, headers, proxy=None):
+    proxies = {"http://": proxy, "https://": proxy} if proxy else None
+    async with httpx.AsyncClient(proxies=proxies) as client:
+        response = await client.get(url, headers=headers)
+        return response.text
+
+def extract_div_contents(html_content):
+    soup = BeautifulSoup(html_content, 'html.parser')
+    result_op_divs = soup.find_all('div', class_='result-op c-container new-pmd')
+    result_xpath_log_divs = soup.find_all('div', class_='result c-container xpath-log new-pmd')
+    
+    entries = []
+    
+    for div in result_op_divs + result_xpath_log_divs:
+        title_tag = div.find('h3')
+        title = title_tag.get_text(strip=True) if title_tag else "无标题"
+        link_tag = div.find('a', href=True)
+        link = link_tag['href'] if link_tag else "无链接"
+        
+        all_texts = [text for text in div.stripped_strings if text != title]
+        content = ' '.join(all_texts)
+        
+        content = re.sub(r'UTC\+8(\d{5}:\d{2}:\d{2})', lambda x: 'UTC+8 ' + ':'.join([x.group(1)[i:i+2] for i in range(0, len(x.group(1)), 2)]).lstrip(':'), content)
+        content = re.sub(r'(\d{2}:\d{2})(\d{4}-\d{2}-\d{2})', r'\1 \2', content)
+        content = re.sub(r'(\d{2}) (\d{2}) : (\d{2}) (\d{2}) : (\d{2}) (\d{2})', r'\1:\3:\5', content)
+        
+        entries.append({
+            'title': title,
+            'link': link,
+            'content': content
+        })
+    
+    return entries
+
+async def searx_search(query, top_n=10, proxy=None):
     url = 'https://searx.bndkt.io/search'
     current_timestamp = int(time.time())
     
@@ -55,7 +90,8 @@ async def searx_search(query, top_n=10):
     page = 1
     max_retries = 10
 
-    async with httpx.AsyncClient() as client:
+    proxies = {"http://": proxy, "https://": proxy} if proxy else None
+    async with httpx.AsyncClient(proxies=proxies) as client:
         while len(urls) < top_n:
             retry_count = 0
             articles = None
@@ -74,17 +110,18 @@ async def searx_search(query, top_n=10):
                     
                     retry_count += 1
                     print(f"第 {page} 页无内容，第 {retry_count} 次重试...")
+                    await asyncio.sleep(1)
 
                 except httpx.HTTPStatusError as exc:
                     print(f"HTTP错误: {exc}")
                     print(f"响应内容: {exc.response.text}")
-                    return f"搜索失败: {str(exc)}"
+                    return f"搜索失败: {str(exc)}", []
                 except httpx.RequestError as exc:
                     print(f"请求错误: {exc}")
-                    return f"请求失败: {str(exc)}"
+                    return f"请求失败: {str(exc)}", []
                 except Exception as e:
                     print(f"未知错误: {e}")
-                    return f"发生未知错误: {str(e)}"
+                    return f"发生未知错误: {str(e)}", []
 
             if not articles:
                 print(f"第 {page} 页重试 {max_retries} 次后仍无内容，结束搜索")
@@ -95,13 +132,13 @@ async def searx_search(query, top_n=10):
                 title = title_tag.get_text(strip=True) if title_tag else '无标题'
 
                 a_tag = article.find('a', class_='url_header')
-                link = a_tag['href'] if a_tag and a_tag['href'].startswith(('http://', 'https://')) else '链接未找到'
+                link = a_tag['href'] if a_tag and 'href' in a_tag.attrs else '无链接'
 
                 content_tag = article.find('p', class_='content')
                 content = content_tag.get_text(strip=True) if content_tag else '无内容'
 
                 results.append(f"标题: {title}\n链接: {link}\n内容: {content}\n{'-'*20}")
-                if link != '链接未找到':
+                if link != '无链接' and link.startswith(('http://', 'https://')):
                     urls.append(link)
 
                 if len(urls) >= top_n:
@@ -109,12 +146,12 @@ async def searx_search(query, top_n=10):
 
             page += 1
 
-    return results[:top_n], urls[:top_n]
+    final = "searx搜索结果:\n" + "\n".join(results)
+    return final, urls[:top_n]
 
-async def baidu_search(query, top_n=10):
-    base_url = "https://www.baidu.com/s"
+async def baidu_search(query, top_n=10, proxy=None):
     current_timestamp = int(time.time())
-    
+    base_url = "https://www.baidu.com/s"
     query_encoded = quote(query.encode('utf-8', 'ignore'))
     
     params = {
@@ -149,23 +186,20 @@ async def baidu_search(query, top_n=10):
     page = 0
     max_retries = 10
 
-    async with httpx.AsyncClient() as client:
+    proxies = {"http://": proxy, "https://": proxy} if proxy else None
+    async with httpx.AsyncClient(proxies=proxies) as client:
         while len(urls) < top_n:
             retry_count = 0
-            articles = None
+            entries = None
             
             while retry_count < max_retries:
                 try:
                     params['pn'] = page * 10
-                    response = await client.get(base_url, params=params, headers=headers)
-                    response.raise_for_status()
+                    url = f"{base_url}?{'&'.join(f'{k}={v}' for k, v in params.items())}"
+                    html_content = await fetch_url(url, headers, proxy)
+                    entries = extract_div_contents(html_content)
 
-                    # 强制使用UTF-8编码
-                    response.encoding = 'utf-8'
-                    soup = BeautifulSoup(response.text, 'html.parser')
-                    articles = soup.find_all('div', class_='result') or soup.find_all('div', class_='c-container')
-
-                    if articles:
+                    if entries:
                         break
                     
                     retry_count += 1
@@ -182,41 +216,24 @@ async def baidu_search(query, top_n=10):
                     print(f"未知错误: {e}")
                     return f"发生未知错误: {str(e)}", []
 
-            if not articles:
+            if not entries:
                 print(f"第 {page + 1} 页重试 {max_retries} 次后仍无内容，结束搜索")
                 break
 
-            for article in articles:
-                try:
-                    title_tag = article.find('h3')
-                    title = title_tag.get_text(strip=True) if title_tag else '无标题'
+            for entry in entries:
+                results.append(f"标题: {entry['title']}\n链接: {entry['link']}\n内容: {entry['content']}\n{'-'*20}")
+                if entry['link'] != '无链接' and entry['link'].startswith(('http://', 'https://')):
+                    urls.append(entry['link'])
 
-                    a_tag = article.find('a')
-                    link = a_tag['href'] if a_tag and a_tag.get('href', '').startswith(('http://', 'https://')) else '链接未找到'
-
-                    content_tag = article.find('div', class_='c-abstract') or article.find('span', class_='content-right_8Zs40')
-                    content = content_tag.get_text(strip=True) if content_tag else '无内容'
-
-                    title = title.encode('utf-8', 'ignore').decode('utf-8', 'ignore')
-                    link = link.encode('utf-8', 'ignore').decode('utf-8', 'ignore')
-                    content = content.encode('utf-8', 'ignore').decode('utf-8', 'ignore')
-
-                    results.append(f"标题: {title}\n链接: {link}\n内容: {content}\n{'-'*20}")
-                    if link != '链接未找到':
-                        urls.append(link)
-
-                    if len(urls) >= top_n:
-                        break
-
-                except Exception as e:
-                    print(f"解析单条结果时出错: {e}")
-                    continue
+                if len(urls) >= top_n:
+                    break
 
             page += 1
 
-    return results[:top_n], urls[:top_n]
+    output = "baidu搜索结果:\n" + "\n".join(results)
+    return output, urls[:top_n]
 
-async def edge_search(query, top_n=10):
+async def edge_search(query, top_n=10, proxy=None):
     """
     edge太恶心了,所以我用了playwright
     """
@@ -228,7 +245,8 @@ async def edge_search(query, top_n=10):
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
-            args=['--disable-blink-features=AutomationControlled']
+            args=['--disable-blink-features=AutomationControlled'],
+            proxy={"server": proxy} if proxy else None
         )
         context = await browser.new_context(
             viewport={"width": 1280, "height": 720},
@@ -238,7 +256,7 @@ async def edge_search(query, top_n=10):
         
         await page.evaluate("() => { Object.defineProperty(navigator, 'webdriver', { get: () => false }); }")
         
-        while len(results) < top_n:
+        while len(url_ls) < top_n:
             search_url = f"https://www.bing.com/search?q={query}&first={(page_num - 1) * 10 + 1}"
             
             retry_count = 0
@@ -260,25 +278,23 @@ async def edge_search(query, top_n=10):
                     page_results_found = True
                     
                     for result in search_results:
-                        if len(results) >= top_n:
+                        if len(url_ls) >= top_n:
                             break
                             
                         try:
                             title_elem = result.find('h2')
                             title = title_elem.get_text().strip() if title_elem else "无标题"
                             link_elem = result.find('a')
-                            link = link_elem['href'] if link_elem and 'href' in link_elem.attrs else ""
+                            link = link_elem['href'] if link_elem and 'href' in link_elem.attrs else "无链接"
                             
-                            if not link or not link.startswith('http'):
-                                continue
-                                
                             summary_elem = result.select_one('.b_caption p') or result.select_one('.b_algoSlug')
                             summary = summary_elem.get_text().strip() if summary_elem else "无摘要"
                             summary = summary[:200]
                             
                             formatted_result = f"标题: {title}\n链接: {link}\n内容: {summary}\n{'-'*20}"
                             results.append(formatted_result)
-                            url_ls.append(link)
+                            if link != "无链接" and link.startswith(('http://', 'https://')):
+                                url_ls.append(link)
                             
                         except Exception as e:
                             print(f"处理第 {page_num} 页单个结果时出错: {str(e)}")
@@ -294,21 +310,24 @@ async def edge_search(query, top_n=10):
                 break
                 
             page_num += 1
-            if len(results) < top_n:
-                print(f"已获取 {len(results)} 个结果，继续下一页")
+            if len(url_ls) < top_n:
+                print(f"已获取 {len(url_ls)} 个结果，继续下一页")
         
         await browser.close()
     
-    return results[:top_n], url_ls[:top_n]
+    return "\n".join(results), url_ls[:top_n]
         
 async def main():
+    proxy = "http://127.0.0.1:7890"
+    # proxy = None  # 默认无代理
+
     while True:
         try:
             query = input("请输入搜索关键词：")
                 
-            results, urls = await edge_search(query)
+            results, urls = await baidu_search(query, proxy=proxy)
             
-            print("\n".join(results))
+            print(results)
             print("有效链接列表：")
             print("\n".join(urls))
             
