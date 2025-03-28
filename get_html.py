@@ -144,11 +144,14 @@ async def get_html(url, proxy=None):
             print(f"Request: {request.url}")
         page.on("request", log_request)
 
-        params = {"q": "test"}
+        params = {}
         headers = {"User-Agent": "Mozilla/5.0"}
         await context.set_extra_http_headers(headers)
 
-        full_url = f"{url}?{'&'.join(f'{k}={v}' for k, v in params.items())}"
+        if params:
+            full_url = f"{url}?{'&'.join(f'{k}={v}' for k, v in params.items())}"
+        else:
+            full_url = url
         print(f"Visiting: {full_url}")
 
         response = await page.goto(full_url, wait_until="networkidle")
@@ -169,7 +172,8 @@ async def main():
         "https://httpbin.org/redirect/3",
         "https://jigsaw.w3.org/HTTP/Basic/",
         "https://expired.badssl.com/",
-        "https://dqxy.ahu.edu.cn/2023/0721/c6135a312651/page.htm"
+        "https://dqxy.ahu.edu.cn/2023/0721/c6135a312651/page.htm",
+        'http://www.baidu.com/link?url=eEncaqZXAV0hqcbKfGGiC_fe0E8CTbw1amFQyZHMCn2xvMlQ6Wr8CgxNB3dYStMku94EXCnAuEDS7z3NNhz4Ja'
     ]
 
     proxy = "http://127.0.0.1:7890"
