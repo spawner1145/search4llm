@@ -6,7 +6,7 @@ import random
 import ssl
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-MAX_RETRIES = 2 # httpx 重试次数
+MAX_RETRIES = 2  # httpx 重试次数
 HTTPX_TIMEOUT = 15
 
 # httpx 使用的 Headers
@@ -23,7 +23,7 @@ ssl_context = ssl.create_default_context()
 ssl_context.check_hostname = False
 ssl_context.verify_mode = ssl.CERT_NONE
 
-async def wait_with_backoff(attempt: int, base_delay: float = 0.5, max_delay: float = 5.0):
+async def wait_with_backoff(attempt, base_delay=0.5, max_delay=5.0):
     """根据尝试次数进行指数退避等待，并加入随机抖动。"""
     delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
     jitter = delay * random.uniform(0.1, 0.5)
@@ -31,14 +31,21 @@ async def wait_with_backoff(attempt: int, base_delay: float = 0.5, max_delay: fl
     logging.info(f"等待 {wait_time:.2f} 秒后重试...")
     await asyncio.sleep(wait_time)
 
-async def get_html(url: str) -> str | None:
+async def get_html(url, proxy=None):
     logging.info(f"开始尝试获取 URL 的 HTML: {url}")
     html_code = None
 
     # httpx
     logging.info("--- 方法: httpx ---")
     try:
-        async with httpx.AsyncClient(headers=HTTPX_HEADERS, follow_redirects=True, timeout=HTTPX_TIMEOUT, verify=ssl_context) as client:
+        proxies = {"http://": proxy, "https://": proxy} if proxy else None
+        async with httpx.AsyncClient(
+            headers=HTTPX_HEADERS,
+            follow_redirects=True,
+            timeout=HTTPX_TIMEOUT,
+            verify=ssl_context,
+            proxies=proxies
+        ) as client:
             for attempt in range(1, MAX_RETRIES + 1):
                 logging.info(f"httpx 第 {attempt}/{MAX_RETRIES} 次尝试...")
                 try:
@@ -105,7 +112,7 @@ async def get_html(url: str) -> str | None:
                     html_code = None
                     if attempt < MAX_RETRIES: await wait_with_backoff(attempt)
 
-            if html_code: return html_code # 如果 httpx 成功了
+            if html_code: return html_code  # 如果 httpx 成功了
 
     except Exception as client_init_err:
         logging.error(f"初始化 httpx 客户端时出错: {client_init_err}")
@@ -116,7 +123,11 @@ async def get_html(url: str) -> str | None:
     # Playwright
     logging.info("--- 方法: Playwright---")
     async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True, args=["--disable-blink-features=AutomationControlled"])
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--disable-blink-features=AutomationControlled"],
+            proxy={"server": proxy} if proxy else None
+        )
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
             extra_http_headers={
@@ -143,8 +154,6 @@ async def get_html(url: str) -> str | None:
         response = await page.goto(full_url, wait_until="networkidle")
 
         content = await page.content()
-        #print(content)
-
         final_url = page.url
         print(f"Final URL: {final_url}")
 
@@ -163,9 +172,12 @@ async def main():
         "https://dqxy.ahu.edu.cn/2023/0721/c6135a312651/page.htm"
     ]
 
+    proxy = "http://127.0.0.1:7890"
+    # proxy = None  # 默认无代理
+
     for test_url in test_urls:
         print(f"\n{'='*10} 测试 URL: {test_url} {'='*10}")
-        html_content = await get_html(test_url)
+        html_content = await get_html(test_url, proxy=proxy)
 
         if html_content:
             print(f"成功获取 HTML 内容 (前 300 字符):")
