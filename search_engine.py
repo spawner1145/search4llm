@@ -323,7 +323,7 @@ async def main():
         try:
             query = input("请输入搜索关键词：")
                 
-            results, urls = await edge_search(query, proxy=proxy)
+            results, urls = await baidu_search(query, proxy=proxy)
             
             print(results)
             print("有效链接列表：")

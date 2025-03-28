@@ -40,7 +40,7 @@ async def is_cloudflare_response(response):
 
     return False
 
-async def post_response(url, payload=None, proxy=None, headers=None, skip_httpx=False, timeout=30, httpx_retries=2):
+async def post_html(url, payload=None, proxy=None, headers=None, skip_httpx=False, timeout=30, httpx_retries=2):
     """使用 POST 请求获取响应内容，支持传入 payload，默认先尝试 httpx，若检测到 CF 或 JS 反爬则使用 Playwright"""
     logging.info(f"开始尝试通过 POST 获取 URL 的响应: {url}")
     response_content = None
@@ -210,7 +210,7 @@ async def main():
 
     for test_url in test_urls:
         print(f"\n{'='*10} 测试 URL: {test_url} {'='*10}")
-        response_content = await post_response(test_url, payload=test_payload, proxy=proxy, headers=test_headers)
+        response_content = await post_html(test_url, payload=test_payload, proxy=proxy, headers=test_headers)
         if response_content:
             print(f"成功获取响应内容 (前 300 字符):")
             print(response_content[:300].strip() + "...")
