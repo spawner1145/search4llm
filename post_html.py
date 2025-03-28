@@ -21,25 +21,19 @@ async def wait_with_backoff(attempt, base_delay=0.5, max_delay=5.0):
     logging.info(f"等待 {wait_time:.2f} 秒后重试...")
     await asyncio.sleep(wait_time)
 
-async def get_html(url, proxy=None, params={}, headers=None, skip_httpx=False, timeout=30, httpx_retries=2):
-    """获取指定 URL 的 HTML 内容，默认先尝试 httpx，若 skip_httpx=True 则直接使用 Playwright"""
-    logging.info(f"开始尝试获取 URL 的 HTML: {url}")
-    html_code = None
+async def post_response(url, payload=None, proxy=None, headers=None, skip_httpx=False, timeout=30, httpx_retries=2):
+    """使用 POST 请求获取响应内容，支持传入 payload，默认先尝试 httpx，若检测到 JS 或反爬则使用 Playwright"""
+    logging.info(f"开始尝试通过 POST 获取 URL 的响应: {url}")
+    response_content = None
 
-    # 如果有参数，构造带参数的 URL
-    if params:
-        url_with_params = f"{url}?{'&'.join(f'{k}={v}' for k, v in params.items())}"
-    else:
-        url_with_params = url
-        
     # 默认的 httpx 请求头
     default_httpx_headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Accept": "*/*",
+        "Accept": "*/*",  # 接受任意内容类型
         "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
         "Accept-Encoding": "gzip, deflate, br",
         "Connection": "keep-alive",
-        "Upgrade-Insecure-Requests": "1",
+        "Content-Type": "application/x-www-form-urlencoded",  # 默认表单格式，可通过 headers 修改
     }
 
     # 如果传入了 headers，则合并默认 headers 和自定义 headers，自定义 headers 优先
@@ -49,7 +43,7 @@ async def get_html(url, proxy=None, params={}, headers=None, skip_httpx=False, t
 
     # 如果 skip_httpx 为 False，先尝试 httpx
     if not skip_httpx:
-        logging.info("--- 方法: httpx ---")
+        logging.info("--- 方法: httpx (POST) ---")
         try:
             proxies = {"http://": proxy, "https://": proxy} if proxy else None
             async with httpx.AsyncClient(
@@ -60,9 +54,10 @@ async def get_html(url, proxy=None, params={}, headers=None, skip_httpx=False, t
                 proxies=proxies
             ) as client:
                 for attempt in range(1, httpx_retries + 1):
-                    logging.info(f"httpx 第 {attempt}/{httpx_retries} 次尝试...")
+                    logging.info(f"httpx 第 {attempt}/{httpx_retries} 次尝试 (POST)...")
                     try:
-                        response = await client.get(url_with_params)
+                        # 使用 POST 请求，传入 payload
+                        response = await client.post(url, data=payload if payload else {})
                         final_url = str(response.url)
                         logging.info(f"httpx 收到状态码: {response.status_code}, 最终 URL: {final_url}")
 
@@ -75,66 +70,69 @@ async def get_html(url, proxy=None, params={}, headers=None, skip_httpx=False, t
 
                                 valid_content = False
                                 if is_html:
+                                    # 检查 HTML 是否有效且不需要 JS 渲染
                                     if raw_text and len(raw_text.strip()) > 150 and '<html' in raw_text.lower() and '</html>' in raw_text.lower():
                                         if '<script' in raw_text.lower() and ('loading' in raw_text.lower() or 'document.write' in raw_text.lower() or 'app-root' in raw_text):
-                                            logging.warning(f"httpx 获取了 HTML，但似乎需要 JS 渲染。将尝试 Playwright。")
+                                            logging.warning(f"httpx 获取了 HTML，但检测到 JS 渲染特征（例如 'loading' 或 'document.write'）。将尝试 Playwright。")
                                         else:
                                             valid_content = True
                                             logging.info(f"httpx 在第 {attempt} 次尝试成功获取有效 HTML。")
                                     else:
                                         logging.warning(f"httpx 获取的 HTML 内容无效、过短或结构不完整。")
                                 elif is_json:
+                                    # 检查 JSON 是否有效
                                     if raw_text and len(raw_text.strip()) > 2:
                                         valid_content = True
                                         logging.info(f"httpx 在第 {attempt} 次尝试成功获取有效 JSON。")
                                     else:
                                         logging.warning(f"httpx 获取的 JSON 内容无效或为空。")
                                 elif raw_text and len(raw_text.strip()) > 50:
+                                    # 对于其他类型的内容，检查是否非空
                                     valid_content = True
                                     logging.info(f"httpx 在第 {attempt} 次尝试成功获取到类型为 {content_type} 的非空内容。")
                                 else:
                                     logging.warning(f"httpx 获取的内容为空或过短 (类型: {content_type})。")
 
                                 if valid_content:
-                                    html_code = raw_text
+                                    response_content = raw_text
                                 else:
-                                    html_code = None
+                                    response_content = None
 
                             except Exception as process_err:
                                 logging.warning(f"httpx 处理响应内容时出错: {process_err}")
-                                html_code = None
+                                response_content = None
                         else:
                             logging.warning(f"httpx 第 {attempt} 次尝试失败，状态码: {response.status_code}")
-                            html_code = None
+                            response_content = None
 
-                        if html_code is None and attempt < httpx_retries:
+                        if response_content is None and attempt < httpx_retries:
                             await wait_with_backoff(attempt)
-                        elif html_code is not None:
+                        elif response_content is not None:
                             break
 
                     except httpx.TimeoutException:
                         logging.warning(f"httpx 第 {attempt} 次尝试超时 (超过 {timeout} 秒)。")
-                        html_code = None
+                        response_content = None
                         if attempt < httpx_retries: await wait_with_backoff(attempt)
                     except httpx.RequestError as e:
                         logging.error(f"httpx 第 {attempt} 次尝试发生请求错误: {e}")
-                        html_code = None
+                        response_content = None
                         if attempt < httpx_retries: await wait_with_backoff(attempt)
                     except Exception as e:
                         logging.error(f"httpx 第 {attempt} 次尝试发生未知错误: {e}")
-                        html_code = None
+                        response_content = None
                         if attempt < httpx_retries: await wait_with_backoff(attempt)
 
-                if html_code: return html_code  # 如果 httpx 成功，返回结果
+                if response_content: return response_content  # 如果 httpx 成功，返回响应内容
 
         except Exception as client_init_err:
             logging.error(f"初始化 httpx 客户端时出错: {client_init_err}")
 
-        logging.warning("httpx 方法未能获取有效 HTML 或内容。将使用 Playwright")
-        html_code = None
+        logging.warning("httpx 方法未能获取有效响应或检测到反爬机制。将使用 Playwright")
+        response_content = None
 
     # Playwright 方法（如果 skip_httpx=True 或 httpx 失败）
-    logging.info("--- 方法: Playwright---")
+    logging.info("--- 方法: Playwright (POST) ---")
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
@@ -147,7 +145,7 @@ async def get_html(url, proxy=None, params={}, headers=None, skip_httpx=False, t
             "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
             "Accept-Encoding": "gzip, deflate, br",
             "Connection": "keep-alive",
-            "Upgrade-Insecure-Requests": "1",
+            "Content-Type": "application/x-www-form-urlencoded",
         }
         # 如果传入了 headers，则使用传入的 headers，否则使用默认值
         playwright_headers = headers if headers else default_playwright_headers
@@ -162,41 +160,33 @@ async def get_html(url, proxy=None, params={}, headers=None, skip_httpx=False, t
             print(f"请求: {request.url}")
         page.on("request", log_request)
 
-        # 如果有参数，构造带参数的 URL
-        if params:
-            full_url = f"{url}?{'&'.join(f'{k}={v}' for k, v in params.items())}"
-        else:
-            full_url = url
-        print(f"正在访问: {full_url}")
-
-        response = await page.goto(full_url, wait_until="networkidle")
-
-        content = await page.content()
-        final_url = page.url
+        print(f"正在通过 POST 访问: {url}")
+        # 使用 Playwright 发送 POST 请求，传入 payload
+        response = await page.request.post(url, data=payload if payload else {}, headers=playwright_headers)
+        response_content = await response.text()  # 获取原始响应文本
+        final_url = response.url
         print(f"最终 URL: {final_url}")
 
         await context.close()
         await browser.close()
-        return content
+        return response_content
 
 async def main():
-    """主函数，测试多个 URL 的 HTML 获取"""
+    """主函数，测试多个 URL 的 POST 响应获取"""
     test_urls = [
-        "https://httpbin.org/html",
-        "https://quotes.toscrape.com/js/",
-        "https://httpbin.org/delay/5",
-        "https://httpbin.org/redirect/3",
-        "https://jigsaw.w3.org/HTTP/Basic/",
-        "https://expired.badssl.com/",  # 这个 URL 有过期证书
-        "https://dqxy.ahu.edu.cn/2023/0721/c6135a312651/page.htm",
-        'http://www.baidu.com/link?url=eEncaqZXAV0hqcbKfGGiC_fe0E8CTbw1amFQyZHMCn2xvMlQ6Wr8CgxNB3dYStMku94EXCnAuEDS7z3NNhz4Ja'
+        "https://httpbin.org/post",  # 支持 POST 的测试 URL，返回请求数据
+        "https://postman-echo.com/post",  # 另一个支持 POST 的测试 URL
+        "https://reqres.in/api/users",  # 支持 POST 的 API，返回创建的用户数据
     ]
 
-    proxy = "http://127.0.0.1:7890"  # 代理设置
+    proxy = "http://127.0.0.1:7890"  # 代理设置，可根据需要修改
     # proxy = None  # 默认无代理
 
-    # 测试用的参数
-    test_params = {"key1": "value1", "key2": "value2"}
+    # 测试用的 payload（可以是字典形式，支持表单数据或 JSON）
+    test_payload = {
+        "username": "test_user",
+        "password": "123456"
+    }
 
     # 测试用的自定义 headers
     test_headers = {
@@ -207,13 +197,13 @@ async def main():
     for test_url in test_urls:
         print(f"\n{'='*10} 测试 URL: {test_url} {'='*10}")
         # 设置 skip_httpx=True 来直接使用 Playwright，跳过 httpx
-        html_content = await get_html(test_url, proxy=proxy, params=test_params, headers=test_headers)
+        response_content = await post_response(test_url, payload=test_payload, proxy=proxy, headers=test_headers, skip_httpx=True)
 
-        if html_content:
-            print(f"成功获取 HTML 内容 (前 300 字符):")
-            print(html_content[:300].strip() + "...")
+        if response_content:
+            print(f"成功获取响应内容 (前 300 字符):")
+            print(response_content[:300].strip() + "...")
         else:
-            print(f"未能获取 URL 的 HTML 内容: {test_url}")
+            print(f"未能获取 URL 的响应内容: {test_url}")
         print(f"{'='*30}\n")
         await asyncio.sleep(1)
 
