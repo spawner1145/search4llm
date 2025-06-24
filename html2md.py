@@ -18,7 +18,7 @@ async def html_to_markdown_combined(html_string: str, preprocess: bool = True) -
 
         # 使用 BeautifulSoup 进行可选的预处理
         if preprocess:
-            print("--- bs4正在处理中 ---")
+            print("bs4正在处理中")
             await asyncio.sleep(0)
 
             soup = BeautifulSoup(html_string, 'html.parser')
@@ -52,10 +52,10 @@ async def html_to_markdown_combined(html_string: str, preprocess: bool = True) -
                 processed_html = str(soup)
 
             await asyncio.sleep(0)
-            print("--- bs4处理完成 ---")
+            print("bs4处理完成")
 
         # html2text进行Markdown转换
-        print("--- 正在 html2text 转换 ---")
+        print("正在 html2text 转换")
         h = html2text.HTML2Text()
 
         # 配置 html2text 选项
@@ -72,17 +72,17 @@ async def html_to_markdown_combined(html_string: str, preprocess: bool = True) -
         markdown_string = h.handle(processed_html)
 
         await asyncio.sleep(0)
-        print("--- html2text 转换完成 ---")
+        print("html2text 转换完成")
 
-        # --- 正则表达式后处理步骤 (Workaround) ---
+        # 正则表达式后处理步骤 (Workaround)
         # 这是为了处理 html2text 意外输出 [code]...[/code] 的情况
-        print("--- 正在进行正则替换 [code] -> ``` ---")
+        print("正在进行正则替换 [code] -> ```")
         markdown_string = re.sub(r'^\s*\[code\]\s*', '```\n', markdown_string, flags=re.IGNORECASE | re.MULTILINE)
         markdown_string = re.sub(r'\s*\[/code\]\s*$', '\n```', markdown_string, flags=re.IGNORECASE | re.MULTILINE)
-        print("--- 正则替换完成 ---")
+        print("正则替换完成")
 
-        # --- 步骤 4: 可选的进一步清理 (合并多余空行) ---
-        # print("--- Running Final Cleanup ---")
+        # 步骤 4: 可选的进一步清理 (合并多余空行)
+        # print("Running Final Cleanup")
         # markdown_string = re.sub(r'\n{3,}', '\n\n', markdown_string) # 合并3个以上换行为2个
 
         # 最终去除首尾空白
