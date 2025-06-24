@@ -68,7 +68,7 @@ async def get_html(url, proxy=None, params={}, headers=None, skip_httpx=False, t
 
     # 如果 skip_httpx 为 False，先尝试 httpx
     if not skip_httpx:
-        logging.info("--- 方法: httpx ---")
+        logging.info("方法: httpx")
         try:
             proxies = {"http://": proxy, "https://": proxy} if proxy else None
             async with httpx.AsyncClient(
@@ -158,7 +158,7 @@ async def get_html(url, proxy=None, params={}, headers=None, skip_httpx=False, t
         html_code = None
 
     # Playwright 方法（如果 skip_httpx=True 或 httpx 失败/检测到 CF）
-    logging.info("--- 方法: Playwright ---")
+    logging.info("方法: Playwright")
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
