@@ -62,7 +62,7 @@ async def post_html(url, payload=None, proxy=None, headers=None, skip_httpx=Fals
 
     # 如果 skip_httpx 为 False，先尝试 httpx
     if not skip_httpx:
-        logging.info("--- 方法: httpx (POST) ---")
+        logging.info("方法: httpx (POST)")
         try:
             proxies = {"http://": proxy, "https://": proxy} if proxy else None
             async with httpx.AsyncClient(
@@ -153,7 +153,7 @@ async def post_html(url, payload=None, proxy=None, headers=None, skip_httpx=Fals
         response_content = None
 
     # Playwright 方法（如果 skip_httpx=True 或 httpx 失败/检测到 CF）
-    logging.info("--- 方法: Playwright (POST) ---")
+    logging.info("方法: Playwright (POST)")
     async with async_playwright() as p:
         browser = await p.chromium.launch(
             headless=True,
